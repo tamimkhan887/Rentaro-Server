@@ -31,6 +31,12 @@ const connectedClient = await connectToMongoDB();
 const rentoraDb = connectedClient.db("rentora")
 const equipmentCollection = rentoraDb.collection("equipments")
 
+app.post("/equipments", async (req, res) => {
+    const result = await equipmentCollection.insertOne(req.body)
+    res.send(result)
+})
+
+
 
 app.listen(port, () => {
     console.log(`Example app listening on port ${port}`);
