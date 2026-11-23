@@ -36,7 +36,12 @@ app.post("/equipments", async (req, res) => {
     res.send(result)
 })
 
-
+app.get("/equipments", async (req, res) => {
+    if (req.query.ownerEmail) {
+        const result = await equipmentCollection.find({ ownerEmail: req.query.ownerEmail }).toArray()
+        res.send(result)
+    }
+})
 
 app.listen(port, () => {
     console.log(`Example app listening on port ${port}`);
