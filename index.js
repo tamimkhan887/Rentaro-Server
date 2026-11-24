@@ -280,6 +280,82 @@ app.delete("/favorites", async (req, res) => {
     }
 });
 
+// ==========================================
+// BOOKINGS / RENTALS ENDPOINTS
+// ==========================================
+
+// POST create a booking
+app.post("/bookings", async (req, res) => {
+    try {
+        const {
+            equipmentId,
+            equipmentName,
+            equipmentImage,
+            rentalPrice,
+            rentalType,
+            ownerEmail,
+            ownerName,
+            userEmail,
+            userName,
+            startDate,
+            endDate,
+            quantity,
+            contactNumber,
+            deliveryAddress,
+            additionalNotes,
+            totalPrice,
+        } = req.body;
+
+        if (!equipmentId || !userEmail || !startDate || !endDate || !contactNumber || !deliveryAddress) {
+            return res.status(400).send({ error: "Missing required booking fields" });
+        }
+
+        const newBooking = {
+            equipmentId,
+            equipmentName: equipmentName || "",
+            equipmentImage: equipmentImage || "",
+            rentalPrice: Number(rentalPrice) || 0,
+            rentalType: rentalType || "Daily",
+            ownerEmail: ownerEmail || "",
+            ownerName: ownerName || "",
+            userEmail,
+            userName: userName || "Customer",
+            startDate,
+            endDate,
+            quantity: Number(quantity) || 1,
+            contactNumber,
+            deliveryAddress,
+            additionalNotes: additionalNotes || "",
+            totalPrice: Number(totalPrice) || Number(rentalPrice) || 0,
+            status: "Pending", // Default booking status
+            createdAt: new Date().toISOString(),
+        };
+
+        const result = await bookingsCollection.insertOne(newBooking);
+        res.send({ success: true, insertedId: result.insertedId });
+    } catch (err) {
+        console.error("Error in POST /bookings:", err);
+        res.status(500).send({ error: "Failed to create booking" });
+    }
+});
+
+// GET bookings
+app.get("/bookings", async (req, res) => {
+    try {
+        const query = {};
+        if (req.query.userEmail) {
+            query.userEmail = req.query.userEmail;
+        }
+        if (req.query.ownerEmail) {
+            query.ownerEmail = req.query.ownerEmail;
+        }
+        const result = await bookingsCollection.find(query).sort({ createdAt: -1 }).toArray();
+        res.send(result);
+    } catch (err) {
+        console.error("Error in GET /bookings:", err);
+        res.status(500).send({ error: "Failed to fetch bookings" });
+    }
+});
 
 app.listen(port, () => {
     console.log(`Example app listening on port ${port}`);
