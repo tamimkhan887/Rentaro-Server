@@ -32,6 +32,7 @@ const rentoraDb = connectedClient.db("rentora")
 const equipmentCollection = rentoraDb.collection("equipments")
 const favoritesCollection = rentoraDb.collection("favorites")
 const bookingsCollection = rentoraDb.collection("bookings")
+const userCollection = rentoraDb.collection("user")
 
 app.post("/equipments", async (req, res) => {
     const result = await equipmentCollection.insertOne(req.body)
@@ -181,6 +182,92 @@ app.get("/equipments/:id", async (req, res) => {
     } catch (err) {
         console.error("Error in GET /equipments/:id:", err);
         res.status(500).send({ error: "Failed to fetch equipment" });
+    }
+});
+
+// PUT / PATCH update equipment by ID
+app.put("/equipments/:id", async (req, res) => {
+    try {
+        const id = req.params.id;
+        let query = {};
+        if (ObjectId.isValid(id)) {
+            query = { _id: new ObjectId(id) };
+        } else {
+            query = { _id: id };
+        }
+
+        const updateData = { ...req.body };
+        delete updateData._id;
+        delete updateData.id;
+        updateData.updatedAt = new Date().toISOString();
+
+        if (updateData.price !== undefined) {
+            updateData.price = Number(updateData.price);
+        }
+        if (updateData.quantity !== undefined) {
+            updateData.quantity = Number(updateData.quantity);
+        }
+
+        const result = await equipmentCollection.updateOne(query, {
+            $set: updateData,
+        });
+
+        res.send({ success: true, modifiedCount: result.modifiedCount });
+    } catch (err) {
+        console.error("Error in PUT /equipments/:id:", err);
+        res.status(500).send({ error: "Failed to update equipment" });
+    }
+});
+
+app.patch("/equipments/:id", async (req, res) => {
+    try {
+        const id = req.params.id;
+        let query = {};
+        if (ObjectId.isValid(id)) {
+            query = { _id: new ObjectId(id) };
+        } else {
+            query = { _id: id };
+        }
+
+        const updateData = { ...req.body };
+        delete updateData._id;
+        delete updateData.id;
+        updateData.updatedAt = new Date().toISOString();
+
+        if (updateData.price !== undefined) {
+            updateData.price = Number(updateData.price);
+        }
+        if (updateData.quantity !== undefined) {
+            updateData.quantity = Number(updateData.quantity);
+        }
+
+        const result = await equipmentCollection.updateOne(query, {
+            $set: updateData,
+        });
+
+        res.send({ success: true, modifiedCount: result.modifiedCount });
+    } catch (err) {
+        console.error("Error in PATCH /equipments/:id:", err);
+        res.status(500).send({ error: "Failed to update equipment" });
+    }
+});
+
+// DELETE equipment by ID
+app.delete("/equipments/:id", async (req, res) => {
+    try {
+        const id = req.params.id;
+        let query = {};
+        if (ObjectId.isValid(id)) {
+            query = { _id: new ObjectId(id) };
+        } else {
+            query = { _id: id };
+        }
+
+        const result = await equipmentCollection.deleteOne(query);
+        res.send({ success: true, deletedCount: result.deletedCount });
+    } catch (err) {
+        console.error("Error in DELETE /equipments/:id:", err);
+        res.status(500).send({ error: "Failed to delete equipment" });
     }
 });
 
@@ -354,6 +441,134 @@ app.get("/bookings", async (req, res) => {
     } catch (err) {
         console.error("Error in GET /bookings:", err);
         res.status(500).send({ error: "Failed to fetch bookings" });
+    }
+});
+
+// ==========================================
+// USER MANAGEMENT ENDPOINTS
+// ==========================================
+
+// GET all users (with search and role filter)
+app.get(["/users", "/user"], async (req, res) => {
+    try {
+        const query = {};
+
+        // Role filter
+        if (req.query.role && req.query.role !== "all" && req.query.role !== "All") {
+            query.role = { $regex: new RegExp(`^${req.query.role}$`, "i") };
+        }
+
+        // Search by name or email
+        if (req.query.search && req.query.search.trim()) {
+            const searchTerm = req.query.search.trim();
+            const searchRegex = { $regex: searchTerm, $options: "i" };
+            query.$or = [{ name: searchRegex }, { email: searchRegex }];
+        }
+
+        const users = await userCollection.find(query).sort({ createdAt: -1 }).toArray();
+        res.send(users);
+    } catch (err) {
+        console.error("Error in GET /users:", err);
+        res.status(500).send({ error: "Failed to fetch users" });
+    }
+});
+
+// GET single user by ID
+app.get("/users/:id", async (req, res) => {
+    try {
+        const id = req.params.id;
+        let query = {};
+        if (ObjectId.isValid(id)) {
+            query = { $or: [{ _id: new ObjectId(id) }, { _id: id }, { id: id }] };
+        } else {
+            query = { $or: [{ _id: id }, { id: id }] };
+        }
+
+        const user = await userCollection.findOne(query);
+        if (!user) {
+            return res.status(404).send({ error: "User not found" });
+        }
+        res.send(user);
+    } catch (err) {
+        console.error("Error in GET /users/:id:", err);
+        res.status(500).send({ error: "Failed to fetch user" });
+    }
+});
+
+// PATCH / PUT update user role
+app.patch("/users/:id/role", async (req, res) => {
+    try {
+        const id = req.params.id;
+        const { role } = req.body;
+
+        if (!role) {
+            return res.status(400).send({ error: "Role is required" });
+        }
+
+        let query = {};
+        if (ObjectId.isValid(id)) {
+            query = { $or: [{ _id: new ObjectId(id) }, { _id: id }, { id: id }] };
+        } else {
+            query = { $or: [{ _id: id }, { id: id }] };
+        }
+
+        const result = await userCollection.updateOne(query, {
+            $set: {
+                role: role,
+                updatedAt: new Date().toISOString(),
+            },
+        });
+
+        res.send({ success: true, modifiedCount: result.modifiedCount, role });
+    } catch (err) {
+        console.error("Error in PATCH /users/:id/role:", err);
+        res.status(500).send({ error: "Failed to update user role" });
+    }
+});
+
+// PATCH / PUT update user
+app.patch("/users/:id", async (req, res) => {
+    try {
+        const id = req.params.id;
+        let query = {};
+        if (ObjectId.isValid(id)) {
+            query = { $or: [{ _id: new ObjectId(id) }, { _id: id }, { id: id }] };
+        } else {
+            query = { $or: [{ _id: id }, { id: id }] };
+        }
+
+        const updateData = { ...req.body };
+        delete updateData._id;
+        delete updateData.id;
+        updateData.updatedAt = new Date().toISOString();
+
+        const result = await userCollection.updateOne(query, {
+            $set: updateData,
+        });
+
+        res.send({ success: true, modifiedCount: result.modifiedCount });
+    } catch (err) {
+        console.error("Error in PATCH /users/:id:", err);
+        res.status(500).send({ error: "Failed to update user" });
+    }
+});
+
+// DELETE user by ID
+app.delete("/users/:id", async (req, res) => {
+    try {
+        const id = req.params.id;
+        let query = {};
+        if (ObjectId.isValid(id)) {
+            query = { $or: [{ _id: new ObjectId(id) }, { _id: id }, { id: id }] };
+        } else {
+            query = { $or: [{ _id: id }, { id: id }] };
+        }
+
+        const result = await userCollection.deleteOne(query);
+        res.send({ success: true, deletedCount: result.deletedCount });
+    } catch (err) {
+        console.error("Error in DELETE /users/:id:", err);
+        res.status(500).send({ error: "Failed to delete user" });
     }
 });
 
