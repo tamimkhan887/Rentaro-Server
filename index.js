@@ -161,7 +161,27 @@ app.get("/equipments", async (req, res) => {
     }
 })
 
-
+// GET single equipment by ID
+app.get("/equipments/:id", async (req, res) => {
+    try {
+        const { ObjectId } = await import('mongodb');
+        const id = req.params.id;
+        let query = {};
+        if (ObjectId.isValid(id)) {
+            query = { _id: new ObjectId(id) };
+        } else {
+            query = { _id: id };
+        }
+        const result = await equipmentCollection.findOne(query);
+        if (!result) {
+            return res.status(404).send({ error: "Equipment not found" });
+        }
+        res.send(result);
+    } catch (err) {
+        console.error("Error in GET /equipments/:id:", err);
+        res.status(500).send({ error: "Failed to fetch equipment" });
+    }
+});
 
 app.listen(port, () => {
     console.log(`Example app listening on port ${port}`);
