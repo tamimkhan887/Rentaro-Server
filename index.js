@@ -5,7 +5,11 @@ import 'dotenv/config';
 import dns from 'node:dns';
 import jwt from 'jsonwebtoken';
 
-dns.setServers(['8.8.8.8', '1.1.1.1']);
+try {
+    dns.setServers(['8.8.8.8', '1.1.1.1']);
+} catch {
+    // Fallback to system default DNS
+}
 const app = express();
 const port = process.env.PORT || 5000;
 
@@ -870,3 +874,5 @@ app.delete("/users/:id", verifyToken, verifyAdmin, async (req, res) => {
 app.listen(port, () => {
     console.log(`Example app listening on port ${port}`);
 });
+
+export default app;
