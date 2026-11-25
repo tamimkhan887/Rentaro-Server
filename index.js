@@ -33,6 +33,7 @@ const equipmentCollection = rentoraDb.collection("equipments")
 const favoritesCollection = rentoraDb.collection("favorites")
 const bookingsCollection = rentoraDb.collection("bookings")
 const userCollection = rentoraDb.collection("user")
+const sessionCollection = rentoraDb.collection("session")
 
 app.post("/equipments", async (req, res) => {
     const result = await equipmentCollection.insertOne(req.body)
@@ -40,13 +41,46 @@ app.post("/equipments", async (req, res) => {
 })
 
 // GET /equipments with Backend Search, Filter, Sort and Limit
-app.get("/equipments", async (req, res) => {
+const verifyToken = async (req, res, next) => {
+    const authHeader = req.headers?.authorization;
+    if (!authHeader) {
+        res.status(401).send({ message: 'Unauthorized' })
+        return;
+    }
+    const token = authHeader.split(" ")[1];
+    if (!token) {
+        res.status(401).send({ message: 'Unauthorized' })
+        return;
+    }
+    const query = { token }
+    const session = await sessionCollection.findOne(query)
+    if (!session) {
+        res.status(401).send({ message: 'Unauthorized' })
+        return;
+    }
+    const userId = session.userId;
+    const userQuery = { _id: new ObjectId(userId) }
+    const user = await userCollection.findOne(userQuery)
+    if (!user) {
+        res.status(401).send({ message: 'Unauthorized' })
+        return;
+    }
+
+    req.user = user;
+    next();
+};
+
+app.get("/equipments", verifyToken, async (req, res) => {
     try {
         const query = {}
 
         // Owner Email filter
         if (req.query.ownerEmail) {
-            query.ownerEmail = req.query.ownerEmail
+            if (req.user.email !== req.query.ownerEmail) {
+                res.status(401).send({ message: 'Unauthorized' })
+                return;
+            }
+            query.ownerEmail = { $regex: new RegExp(`^${req.query.ownerEmail.trim()}$`, "i") };
         }
 
         // Status filter (e.g. Approved)
@@ -156,6 +190,7 @@ app.get("/equipments", async (req, res) => {
             return res.send(result)
         }
 
+
         const result = await equipmentCollection.find(query).sort(sortOption).toArray()
         res.send(result)
     } catch (err) {
@@ -174,6 +209,7 @@ app.get("/equipments/:id", async (req, res) => {
         } else {
             query = { _id: id };
         }
+        console.log(req.query)
         const result = await equipmentCollection.findOne(query);
         if (!result) {
             return res.status(404).send({ error: "Equipment not found" });
@@ -391,10 +427,23 @@ app.post("/bookings", async (req, res) => {
             deliveryAddress,
             additionalNotes,
             totalPrice,
+            status,
+            paymentStatus,
+            transactionId,
+            stripeSessionId,
+            paidAt,
         } = req.body;
 
         if (!equipmentId || !userEmail || !startDate || !endDate || !contactNumber || !deliveryAddress) {
             return res.status(400).send({ error: "Missing required booking fields" });
+        }
+
+        // Idempotency: check if booking already exists for this stripeSessionId
+        if (stripeSessionId) {
+            const existing = await bookingsCollection.findOne({ stripeSessionId });
+            if (existing) {
+                return res.send({ success: true, insertedId: existing._id, existing: true, booking: existing });
+            }
         }
 
         const newBooking = {
@@ -414,15 +463,106 @@ app.post("/bookings", async (req, res) => {
             deliveryAddress,
             additionalNotes: additionalNotes || "",
             totalPrice: Number(totalPrice) || Number(rentalPrice) || 0,
-            status: "Pending", // Default booking status
+            status: status || "Confirmed",
+            paymentStatus: paymentStatus || "Paid",
+            transactionId: transactionId || "",
+            stripeSessionId: stripeSessionId || "",
+            paidAt: paidAt || new Date().toISOString(),
             createdAt: new Date().toISOString(),
         };
 
         const result = await bookingsCollection.insertOne(newBooking);
-        res.send({ success: true, insertedId: result.insertedId });
+
+        // Atomically reduce available equipment stock in equipmentCollection
+        try {
+            const bookedQty = Number(quantity) || 1;
+            let eqQuery = {};
+            if (ObjectId.isValid(equipmentId)) {
+                eqQuery = { $or: [{ _id: new ObjectId(equipmentId) }, { _id: equipmentId }, { id: equipmentId }] };
+            } else {
+                eqQuery = { $or: [{ _id: equipmentId }, { id: equipmentId }] };
+            }
+
+            const currentEquipment = await equipmentCollection.findOne(eqQuery);
+            if (currentEquipment) {
+                const currentQty = Number(currentEquipment.quantity) || 0;
+                const newQty = Math.max(0, currentQty - bookedQty);
+                await equipmentCollection.updateOne(eqQuery, {
+                    $set: {
+                        quantity: newQty,
+                        updatedAt: new Date().toISOString(),
+                    },
+                });
+            }
+        } catch (stockErr) {
+            console.error("Error reducing equipment stock:", stockErr);
+        }
+
+        res.send({ success: true, insertedId: result.insertedId, booking: newBooking });
     } catch (err) {
         console.error("Error in POST /bookings:", err);
         res.status(500).send({ error: "Failed to create booking" });
+    }
+});
+
+// PATCH update booking status (restore stock if cancelled)
+app.patch("/bookings/:id/status", async (req, res) => {
+    try {
+        const id = req.params.id;
+        const { status } = req.body;
+        if (!status) {
+            return res.status(400).send({ error: "status is required" });
+        }
+
+        let query = {};
+        if (ObjectId.isValid(id)) {
+            query = { $or: [{ _id: new ObjectId(id) }, { _id: id }] };
+        } else {
+            query = { _id: id };
+        }
+
+        const existingBooking = await bookingsCollection.findOne(query);
+        if (!existingBooking) {
+            return res.status(404).send({ error: "Booking not found" });
+        }
+
+        // If booking is being cancelled, restore the reserved stock
+        if (status === "Cancelled" && existingBooking.status !== "Cancelled") {
+            try {
+                let eqQuery = {};
+                const eqId = existingBooking.equipmentId;
+                if (ObjectId.isValid(eqId)) {
+                    eqQuery = { $or: [{ _id: new ObjectId(eqId) }, { _id: eqId }, { id: eqId }] };
+                } else {
+                    eqQuery = { $or: [{ _id: eqId }, { id: eqId }] };
+                }
+                const eq = await equipmentCollection.findOne(eqQuery);
+                if (eq) {
+                    const currentQty = Number(eq.quantity) || 0;
+                    const restoredQty = currentQty + (Number(existingBooking.quantity) || 1);
+                    await equipmentCollection.updateOne(eqQuery, {
+                        $set: {
+                            quantity: restoredQty,
+                            updatedAt: new Date().toISOString(),
+                        },
+                    });
+                }
+            } catch (restoreErr) {
+                console.error("Error restoring stock on cancel:", restoreErr);
+            }
+        }
+
+        const result = await bookingsCollection.updateOne(query, {
+            $set: {
+                status,
+                updatedAt: new Date().toISOString(),
+            },
+        });
+
+        res.send({ success: true, modifiedCount: result.modifiedCount, status });
+    } catch (err) {
+        console.error("Error in PATCH /bookings/:id/status:", err);
+        res.status(500).send({ error: "Failed to update booking status" });
     }
 });
 
@@ -431,10 +571,10 @@ app.get("/bookings", async (req, res) => {
     try {
         const query = {};
         if (req.query.userEmail) {
-            query.userEmail = req.query.userEmail;
+            query.userEmail = { $regex: new RegExp(`^${req.query.userEmail.trim()}$`, "i") };
         }
         if (req.query.ownerEmail) {
-            query.ownerEmail = req.query.ownerEmail;
+            query.ownerEmail = { $regex: new RegExp(`^${req.query.ownerEmail.trim()}$`, "i") };
         }
         const result = await bookingsCollection.find(query).sort({ createdAt: -1 }).toArray();
         res.send(result);
